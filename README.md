@@ -45,6 +45,14 @@ limits. Watch Buddy is built around three efficiency layers:
 3. **Bundle hygiene** — perceptual dedup guarantees no near-identical image
    ships twice in one bundle, and full-frame fallback thumbnails are capped
    at one per bundle.
+4. **The Delta Atlas (v1.1)** — when several regions change, their crops are
+   packed into ONE gutter-separated mosaic with a coordinate legend, so the
+   canvas area Claude pays for is roughly *the sum of the changes*, not one
+   image per change. As close to "send only the pixels that moved" as a
+   vision model's rectangle-shaped appetite allows. Optional content-aware
+   downscaling (`crop_downscale`, default off) shrinks large photographic
+   crops while never touching text zones like chat — because nobody should
+   have to read blurry text, silicon included.
 
 And the biggest lever of all: **pull, not push.** Capture runs locally at
 10fps for free — Claude only *sees* frames when it calls `get_next_bundle()`,

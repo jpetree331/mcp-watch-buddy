@@ -62,6 +62,21 @@ class Bundler:
         self.window_title = window_title
         self._delta = delta_engine or DeltaEngine()
 
+        # v1.1 — Delta Atlas: pack all changed-region crops into ONE gutter-
+        # separated mosaic per bundle (Jess's original "send only the pixels
+        # that move" concept, adapted to vision's rectangle-shaped appetite).
+        self.atlas_cfg = {
+            **{"enabled": True, "gutter": 8, "max_tiles": 12, "max_width": 1024},
+            **cfg.get("atlas", {}),
+        }
+        # v1.1 — content-aware crop downscaling. DEFAULT OFF. Text zones
+        # (chat) are always excluded: text needs resolution; webcams don't.
+        self.downscale_cfg = {
+            **{"enabled": False, "min_dimension": 400, "scale": 0.6,
+               "exclude_zones": ["chat"]},
+            **cfg.get("crop_downscale", {}),
+        }
+
         # Thread-safe queue; cap at 30 frames to prevent memory runaway
         self._q: queue.Queue = queue.Queue(maxsize=30)
         self._stop_event = threading.Event()
@@ -151,6 +166,7 @@ class Bundler:
         #   ten near-identical full pages per bundle. One is plenty.
         sent_hashes: set[str] = set()
         uniform_thumb_sent = False
+        tiles: list[dict] = []  # changed-region crops awaiting atlas packing
 
         def _add_image(img: Image.Image) -> bool:
             key = _hash_frame(img)
@@ -185,11 +201,20 @@ class Bundler:
                 cached = result["cached_regions"]
 
                 if changed:
-                    # Encode precise changed-region crops (deduped perceptually)
+                    # Collect deduped changed-region crops as atlas tiles
                     for region in changed:
                         crop = self._safe_crop(frame, region)
-                        if crop is not None:
-                            _add_image(crop)
+                        if crop is None:
+                            continue
+                        key = _hash_frame(crop)
+                        if key in sent_hashes:
+                            continue
+                        sent_hashes.add(key)
+                        tiles.append({
+                            "frame_index": idx, "name": region.name,
+                            "x": region.x, "y": region.y,
+                            "w": region.w, "h": region.h, "img": crop,
+                        })
                 else:
                     # Hash changed but contours below noise threshold (subtle
                     # uniform shift). One context thumbnail per bundle, max.
@@ -211,18 +236,65 @@ class Bundler:
                 "cached_regions": [r if isinstance(r, str) else r.name for r in cached],
             })
 
+        # Ship the collected tiles: packed into one atlas when there are
+        # several, or as plain crops when there's just one (or atlas is off).
+        atlas_legend = None
+        if tiles:
+            tiles = self._maybe_downscale(tiles)
+            if self.atlas_cfg.get("enabled", True) and len(tiles) >= 2:
+                atlas_img, atlas_legend = _pack_atlas(
+                    tiles,
+                    gutter=int(self.atlas_cfg.get("gutter", 8)),
+                    max_tiles=int(self.atlas_cfg.get("max_tiles", 12)),
+                    max_width=int(self.atlas_cfg.get("max_width", 1024)),
+                )
+                encoded.append(_encode_png(atlas_img))
+            else:
+                for t in tiles:
+                    encoded.append(_encode_png(t["img"]))
+
         # A baseline bundle is always meaningful even if nothing moved yet
         is_baseline = len(metadata) > 0 and metadata[0].get("is_baseline", False)
 
         return {
             "frames": encoded,
             "metadata": metadata,
+            "atlas": atlas_legend,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "window_title": self.window_title,
             "frame_count": len(frames),
             "has_changes": any_hash_change or is_baseline,
             "is_baseline": is_baseline,
         }
+
+    def _maybe_downscale(self, tiles: list[dict]) -> list[dict]:
+        """Content-aware downscale (opt-in): shrink large photographic crops;
+        never touch tiles centered in excluded (text-heavy) zones."""
+        cfg = self.downscale_cfg
+        if not cfg.get("enabled", False):
+            return tiles
+        min_dim = int(cfg.get("min_dimension", 400))
+        scale = float(cfg.get("scale", 0.6))
+        excluded = [
+            z for name, z in getattr(self._delta, "zones", {}).items()
+            if name in cfg.get("exclude_zones", [])
+        ]
+        out = []
+        for t in tiles:
+            img = t["img"]
+            cx, cy = t["x"] + t["w"] // 2, t["y"] + t["h"] // 2
+            in_excluded = any(
+                z.x <= cx < z.x + z.width and z.y <= cy < z.y + z.height
+                for z in excluded
+            )
+            if not in_excluded and img.width > min_dim and img.height > min_dim:
+                img = img.resize(
+                    (max(1, int(img.width * scale)), max(1, int(img.height * scale))),
+                    Image.Resampling.LANCZOS,
+                )
+                t = {**t, "img": img, "downscaled": scale}
+            out.append(t)
+        return out
 
     def _safe_crop(self, frame: Image.Image, region: RegionChange) -> Optional[Image.Image]:
         fw, fh = frame.size
@@ -314,6 +386,78 @@ class _BundleWrapper:
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+def _pack_atlas(
+    tiles: list[dict],
+    gutter: int = 8,
+    max_tiles: int = 12,
+    max_width: int = 1024,
+    background: tuple = (96, 96, 96),
+) -> tuple:
+    """Pack changed-region crops into one gutter-separated mosaic.
+
+    Ships only the pixels that moved, tiled densely — total canvas area is
+    roughly the sum of the changes rather than one image per change. Gutters
+    keep vision from blending adjacent tiles into a single hallucinated
+    scene; the returned legend maps every tile back to its original screen
+    coordinates ("src") and its position inside the atlas ("atlas").
+    """
+    dropped = 0
+    if len(tiles) > max_tiles:
+        dropped = len(tiles) - max_tiles
+        tiles = tiles[-max_tiles:]  # keep the most recent — recency wins
+
+    # Shelf packing: tallest tiles first for row density
+    order = sorted(range(len(tiles)), key=lambda i: -tiles[i]["img"].height)
+    row_limit = max(max_width, max(t["img"].width for t in tiles) + 2 * gutter)
+    rows: list[list[int]] = []
+    cur_row: list[int] = []
+    cur_w = gutter
+    for i in order:
+        w = tiles[i]["img"].width
+        if cur_row and cur_w + w + gutter > row_limit:
+            rows.append(cur_row)
+            cur_row, cur_w = [], gutter
+        cur_row.append(i)
+        cur_w += w + gutter
+    if cur_row:
+        rows.append(cur_row)
+
+    positions: dict[int, tuple] = {}
+    canvas_w, y = 0, gutter
+    for row in rows:
+        x = gutter
+        row_h = max(tiles[i]["img"].height for i in row)
+        for i in row:
+            positions[i] = (x, y)
+            x += tiles[i]["img"].width + gutter
+        canvas_w = max(canvas_w, x)
+        y += row_h + gutter
+
+    canvas = Image.new("RGB", (canvas_w, y), background)
+    legend = []
+    for i, (px, py) in positions.items():
+        t = tiles[i]
+        canvas.paste(t["img"], (px, py))
+        entry = {
+            "tile": len(legend),
+            "frame_index": t["frame_index"],
+            "name": t["name"],
+            "src": {"x": t["x"], "y": t["y"], "w": t["w"], "h": t["h"]},
+            "atlas": {"x": px, "y": py, "w": t["img"].width, "h": t["img"].height},
+        }
+        if t.get("downscaled"):
+            entry["downscaled"] = t["downscaled"]
+        legend.append(entry)
+
+    return canvas, {
+        "tiles": legend,
+        "gutter": gutter,
+        "dropped_tiles": dropped,
+        "note": ("One packed image contains every changed region, separated "
+                 "by gray gutters; 'src' gives original screen coordinates."),
+    }
+
 
 def _encode_png(img: Image.Image) -> str:
     """PNG-encode a PIL image and return base64 string."""

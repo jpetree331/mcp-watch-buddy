@@ -5,6 +5,18 @@
   "bundle_interval_seconds": 1,
   "change_threshold": 25,
   "min_contour_area": 500,
+  "atlas": {
+    "enabled": true,
+    "gutter": 8,
+    "max_tiles": 12,
+    "max_width": 1024
+  },
+  "crop_downscale": {
+    "enabled": false,
+    "min_dimension": 400,
+    "scale": 0.6,
+    "exclude_zones": ["chat"]
+  },
   "screen_zones": {
     "gameplay": {"x": 0, "y": 0, "width": 1000, "height": 680},
     "chat": {"x": 1000, "y": 0, "width": 280, "height": 720},
