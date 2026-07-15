@@ -8,6 +8,11 @@ what actually *changed*, and hands Claude compact image bundles that Claude
 reads with its own vision — **on your existing subscription. No API key. No
 per-token billing. Ever.**
 
+*(That zero-API promise covers the eyes. The optional **ears** — desktop-audio
+transcription — are the one feature that uses an external API: a Whisper
+endpoint of your choosing. Skip the key and the ears simply stay off; vision
+is unaffected. Details below.)*
+
 > *"Claude Desktop is the brain. Watch Buddy is the eyes and memory."*
 
 ## What it feels like
@@ -59,30 +64,41 @@ And the biggest lever of all: **pull, not push.** Capture runs locally at
 i.e., when you're actually talking. Cost scales with how often you chat, not
 how long you watch.
 
-## Ears 👂 (v1.2)
+## Ears 👂 (v1.2) — optional, and the one feature that uses an API
 
-Watch Buddy can also **hear** — and pair what it hears with what it sees:
+Watch Buddy can also **hear** — and pair what it hears with what it sees.
+Unlike vision (which runs entirely on your Claude subscription), the ears
+send audio to a speech-to-text API, so they need a key. **They are fully
+optional**: no key, no audio device, or no network, and the ears simply
+report themselves disabled — the eyes never notice.
 
-- Captures **WASAPI loopback** audio: what your speakers play, **never the
-  microphone**. Family chaos three feet from your desk cannot enter the
-  transcript, by construction — the mic is simply never opened.
-- Silent chunks are gated **locally** (RMS threshold) and discarded free of
-  charge; only speech-bearing audio is transcribed.
-- Transcription runs on Whisper large-v3-turbo via
-  [AudioDojo on Chutes](https://chutes.ai) — put your key in a `.env` next
-  to the module (`CHUTES_API_KEY=...`) or the environment. Any
-  Whisper-style endpoint accepting `{audio_b64, language}` works
-  (configurable in `config.json` → `ears.endpoint`).
-- Every `get_next_bundle()` response includes **`transcript_30s`** — the
-  last 30 seconds of dialogue around the exact frames Claude is looking
-  at. Sight and sound describe the same moment.
-- `get_transcript(seconds)` fetches any window on demand; `set_ears(bool)`
-  toggles the whole feature at runtime (default **on**; disable in
-  `config.json` → `ears.enabled`). A rolling per-day text log lands in
-  `transcripts/` (gitignored) if you want to read along yourself.
+**How the hearing works, end to end:**
 
-No key, no audio device, or no network? The ears report themselves
-disabled and the eyes are never affected.
+1. **Capture** — Windows **WASAPI loopback**: the stream taps what your
+   *speakers play*, and the microphone is **never opened**. Household noise
+   around your desk cannot enter the transcript, by construction — the same
+   mechanism OBS uses for "Desktop Audio."
+2. **Silence gate (local, free)** — audio is chunked (~12s) and RMS-checked
+   on your machine; silent chunks are discarded without any network call.
+   You only pay to transcribe actual speech.
+3. **Transcription** — speech chunks go to a Whisper-style endpoint
+   (default: Whisper large-v3-turbo via [AudioDojo on Chutes](https://chutes.ai)).
+   Put your key in a `.env` next to the module (`CHUTES_API_KEY=...`) or the
+   environment. Any endpoint accepting `{audio_b64, language}` and returning
+   `{text}` works — configurable via `config.json` → `ears.endpoint`.
+4. **Rolling transcript** — timestamped lines are kept in memory (default
+   4 hours, `ears.keep_minutes`) and appended to a permanent per-day log in
+   `transcripts/` (gitignored) — your own captions archive for streams that
+   never offered CC.
+5. **Delivery cursor (exactly-once)** — every `get_next_bundle()` carries
+   **`transcript_since_last_look`**: precisely the dialogue between Claude's
+   previous glance and this one. Frequent glances → short snippets, never
+   duplicated; a 40-minute gap → all 40 minutes, delivered once. Sight
+   samples; sound is continuous; nothing is missed and nothing is re-read.
+
+`get_transcript(seconds)` fetches any window on demand (a *peek* — it never
+moves the delivery cursor), and `set_ears(bool)` toggles the whole feature
+at runtime, persisted to config. Default is **on** when a key is present.
 
 ## The tools
 
