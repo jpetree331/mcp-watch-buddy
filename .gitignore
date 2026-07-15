@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+watch_buddy.db
+watch_buddy_debug.log
+.env
+settings.local.json

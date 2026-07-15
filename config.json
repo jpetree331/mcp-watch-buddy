@@ -1,0 +1,13 @@
+{
+  "default_window": null,
+  "persona": "curious, dry-humored, observant — you notice things others miss",
+  "fps": 10,
+  "bundle_interval_seconds": 1,
+  "change_threshold": 25,
+  "min_contour_area": 500,
+  "screen_zones": {
+    "gameplay": {"x": 0, "y": 0, "width": 1000, "height": 680},
+    "chat": {"x": 1000, "y": 0, "width": 280, "height": 720},
+    "hud": {"x": 0, "y": 680, "width": 1000, "height": 40}
+  }
+}
