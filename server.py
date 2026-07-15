@@ -206,6 +206,7 @@ async def attach_to_window(window_title: str) -> dict:
         ear_stream = EarStream(cfg.get("ears", {})).start()
     except Exception:
         ear_stream = None
+    _state.ears_cursor = time.time()  # transcript delivery cursor starts now
 
     with _state.lock:
         _state.capture = capture
@@ -308,7 +309,9 @@ async def get_next_bundle() -> list:
         }
         ear_stream = getattr(_state, "ears", None)
         if ear_stream is not None:
-            waiting["transcript_30s"] = ear_stream.get_recent(30)
+            cursor = getattr(_state, "ears_cursor", 0) or (time.time() - 30)
+            waiting["transcript_since_last_look"] = ear_stream.get_since(cursor)
+            _state.ears_cursor = time.time()
         return [mcp_types.TextContent(type="text", text=json.dumps(waiting))]
 
     age = round(time.monotonic() - bundle_time, 2)
@@ -318,11 +321,14 @@ async def get_next_bundle() -> list:
     meta["status"] = "ok"
     meta["bundle_age_seconds"] = age
 
-    # v1.2 Ears — the last 30 seconds of desktop audio, transcribed, rides
-    # along with every bundle so sight and sound describe the same moment.
+    # v1.2 Ears — everything heard SINCE THE LAST LOOK rides along with
+    # every bundle: a delivery cursor, so sight and sound stay in sync with
+    # no duplicated and no missed audio between glances.
     ear_stream = getattr(_state, "ears", None)
     if ear_stream is not None:
-        meta["transcript_30s"] = ear_stream.get_recent(30)
+        cursor = getattr(_state, "ears_cursor", 0) or (time.time() - 30)
+        meta["transcript_since_last_look"] = ear_stream.get_since(cursor)
+        _state.ears_cursor = time.time()
 
     # Measure image data and estimate vision tokens before returning
     import base64 as _b64, io as _io

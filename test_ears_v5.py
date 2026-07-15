@@ -68,6 +68,30 @@ def test_window_excludes_old_entries():
     print("PASS: get_recent windows correctly")
 
 
+def test_cursor_exactly_once():
+    """Jess's cursor: each delivery covers exactly the audio since the last
+    one — no duplicates, no gaps."""
+    ear = EarStream({"enabled": True, "log_to_file": False},
+                    transcribe_fn=lambda wav: "x")
+    now = time.time()
+    with ear._lock:
+        ear._entries.append({"t0": now - 20, "t1": now - 15, "text": "first words"})
+        ear._entries.append({"t0": now - 10, "t1": now - 5, "text": "second words"})
+    # First delivery from a cursor before both entries: gets both
+    d1 = ear.get_since(now - 30)
+    assert "first words" in d1["text"] and "second words" in d1["text"]
+    # Cursor advanced to "now": nothing new
+    d2 = ear.get_since(now)
+    assert d2["text"] == "" and d2["lines"] == []
+    # New entry arrives after the cursor: delivered exactly once
+    with ear._lock:
+        ear._entries.append({"t0": now + 1, "t1": now + 2, "text": "third words"})
+    d3 = ear.get_since(now)
+    assert d3["text"] == "third words"
+    assert "first words" not in d3["text"], "duplicates must not re-deliver"
+    print("PASS: delivery cursor — no duplicates, no gaps, exactly once")
+
+
 def test_config_disable():
     ear = EarStream({"enabled": False}).start()
     assert ear.status == "disabled (config)"
@@ -78,5 +102,6 @@ if __name__ == "__main__":
     test_silence_gate()
     test_speech_chunk_transcribed_and_recallable()
     test_window_excludes_old_entries()
+    test_cursor_exactly_once()
     test_config_disable()
     print("\nAll ears v5 tests passed")

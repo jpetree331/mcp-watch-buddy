@@ -148,6 +148,28 @@ class EarStream:
             "text": " ".join(e["text"] for e in hits),
         }
 
+    def get_since(self, cursor: float) -> dict:
+        """Entries strictly after `cursor` — the exactly-once bundle rider.
+
+        The server tracks when the transcript was last delivered and passes
+        that time here, so every bundle carries precisely the audio since
+        the previous look: no duplicates, no gaps (Jess's cursor, 2026-07-15).
+        """
+        now = time.time()
+        with self._lock:
+            hits = [e for e in self._entries if e["t1"] > cursor]
+        lines = [
+            f"[{datetime.fromtimestamp(e['t0']).strftime('%H:%M:%S')}] {e['text']}"
+            for e in hits
+        ]
+        return {
+            "status": self.status,
+            "since": datetime.fromtimestamp(cursor).strftime("%H:%M:%S"),
+            "covers_seconds": round(now - cursor, 1),
+            "lines": lines,
+            "text": " ".join(e["text"] for e in hits),
+        }
+
     def status_dict(self) -> dict:
         return {
             "status": self.status,
