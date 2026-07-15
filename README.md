@@ -59,6 +59,31 @@ And the biggest lever of all: **pull, not push.** Capture runs locally at
 i.e., when you're actually talking. Cost scales with how often you chat, not
 how long you watch.
 
+## Ears 👂 (v1.2)
+
+Watch Buddy can also **hear** — and pair what it hears with what it sees:
+
+- Captures **WASAPI loopback** audio: what your speakers play, **never the
+  microphone**. Family chaos three feet from your desk cannot enter the
+  transcript, by construction — the mic is simply never opened.
+- Silent chunks are gated **locally** (RMS threshold) and discarded free of
+  charge; only speech-bearing audio is transcribed.
+- Transcription runs on Whisper large-v3-turbo via
+  [AudioDojo on Chutes](https://chutes.ai) — put your key in a `.env` next
+  to the module (`CHUTES_API_KEY=...`) or the environment. Any
+  Whisper-style endpoint accepting `{audio_b64, language}` works
+  (configurable in `config.json` → `ears.endpoint`).
+- Every `get_next_bundle()` response includes **`transcript_30s`** — the
+  last 30 seconds of dialogue around the exact frames Claude is looking
+  at. Sight and sound describe the same moment.
+- `get_transcript(seconds)` fetches any window on demand; `set_ears(bool)`
+  toggles the whole feature at runtime (default **on**; disable in
+  `config.json` → `ears.enabled`). A rolling per-day text log lands in
+  `transcripts/` (gitignored) if you want to read along yourself.
+
+No key, no audio device, or no network? The ears report themselves
+disabled and the eyes are never affected.
+
 ## The tools
 
 | Tool | What it does |
@@ -70,8 +95,10 @@ how long you watch.
 | `get_recent_observations(n)` | Recall recent context |
 | `search_memory(query)` | Search everything ever observed |
 | `set_persona(text)` | Change the companion's personality |
-| `get_status()` | Pipeline health, bundles produced, estimated vision-token usage |
-| `detach()` | Stop watching, close the session |
+| `get_transcript(seconds)` | The ears: desktop-audio transcript for the last N seconds |
+| `set_ears(enabled)` | Toggle audio transcription at runtime (persists to config) |
+| `get_status()` | Pipeline health, bundles produced, vision-token usage, ear status |
+| `detach()` | Stop watching (and listening), close the session |
 
 The memory layer means your companion *remembers the stream* — across the
 whole session and across sessions (it's a SQLite file).

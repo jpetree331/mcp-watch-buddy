@@ -197,9 +197,20 @@ async def attach_to_window(window_title: str) -> dict:
     memory = MemoryStore()
     memory.start_session(matched_title)
 
+    # v1.2 — Ears: desktop-audio transcription (WASAPI loopback, never the
+    # mic). Toggle lives in config ("ears".enabled, default true).
+    # Failure-soft: any problem leaves ears disabled and eyes unaffected.
+    ear_stream = None
+    try:
+        from ears import EarStream
+        ear_stream = EarStream(cfg.get("ears", {})).start()
+    except Exception:
+        ear_stream = None
+
     with _state.lock:
         _state.capture = capture
         _state.bundler = bundler
+        _state.ears = ear_stream
         _state.memory = memory
         _state.window_title = matched_title
         _state.region = region
@@ -228,10 +239,12 @@ def _stop_pipeline():
         capture = _state.capture
         bundler = _state.bundler
         memory = _state.memory
+        ear_stream = getattr(_state, "ears", None)
         obs_count = _state.observations_logged
         _state.capture = None
         _state.bundler = None
         _state.memory = None
+        _state.ears = None
         _state.window_title = None
         _state.region = None
         _state.latest_bundle = None
@@ -240,6 +253,8 @@ def _stop_pipeline():
         capture.stop()
     if bundler:
         bundler.stop()
+    if ear_stream:
+        ear_stream.stop()
     if memory:
         memory.end_session()
     return obs_count
@@ -284,16 +299,17 @@ async def get_next_bundle() -> list:
         _state.latest_bundle = None  # consume it
 
     if bundle is None:
-        return [mcp_types.TextContent(
-            type="text",
-            text=json.dumps({
-                "status": "waiting",
-                "has_changes": False,
-                "frame_count": 0,
-                "window_title": window_title,
-                "bundle_age_seconds": 0.0,
-            }),
-        )]
+        waiting = {
+            "status": "waiting",
+            "has_changes": False,
+            "frame_count": 0,
+            "window_title": window_title,
+            "bundle_age_seconds": 0.0,
+        }
+        ear_stream = getattr(_state, "ears", None)
+        if ear_stream is not None:
+            waiting["transcript_30s"] = ear_stream.get_recent(30)
+        return [mcp_types.TextContent(type="text", text=json.dumps(waiting))]
 
     age = round(time.monotonic() - bundle_time, 2)
 
@@ -301,6 +317,12 @@ async def get_next_bundle() -> list:
     meta = {k: v for k, v in bundle.items() if k != "frames"}
     meta["status"] = "ok"
     meta["bundle_age_seconds"] = age
+
+    # v1.2 Ears — the last 30 seconds of desktop audio, transcribed, rides
+    # along with every bundle so sight and sound describe the same moment.
+    ear_stream = getattr(_state, "ears", None)
+    if ear_stream is not None:
+        meta["transcript_30s"] = ear_stream.get_recent(30)
 
     # Measure image data and estimate vision tokens before returning
     import base64 as _b64, io as _io
@@ -414,6 +436,57 @@ async def set_persona(persona: str) -> dict:
 
 
 @mcp.tool()
+async def get_transcript(seconds: int = 30) -> dict:
+    """Return the desktop-audio transcript from the last N seconds.
+
+    Watch Buddy's EARS (v1.2): WASAPI loopback audio — what the speakers
+    play, NEVER the microphone — silence-gated locally, transcribed via
+    Whisper (AudioDojo on Chutes). Pair with get_next_bundle to see AND
+    hear the same moment.
+
+    Returns {status, window_seconds, lines (timestamped), text (joined)}.
+    Ears start automatically with attach_to_window when config
+    "ears".enabled is true (the default).
+    """
+    ear_stream = getattr(_state, "ears", None)
+    if ear_stream is None:
+        return {"status": "ears not running — attach to a window first "
+                          "(or ears are disabled in config)"}
+    return ear_stream.get_recent(max(1, int(seconds)))
+
+
+@mcp.tool()
+async def set_ears(enabled: bool) -> dict:
+    """Toggle the ears at runtime and persist the choice to config.json.
+
+    enabled=False stops any live transcription immediately; enabled=True
+    starts listening now if a watch session is active (and applies to all
+    future sessions either way).
+    """
+    cfg = _load_config()
+    ears_cfg = cfg.get("ears", {})
+    ears_cfg["enabled"] = bool(enabled)
+    cfg["ears"] = ears_cfg
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+
+    ear_stream = getattr(_state, "ears", None)
+    if not enabled and ear_stream is not None:
+        ear_stream.stop()
+        with _state.lock:
+            _state.ears = None
+        return {"status": "ok", "ears": "stopped and disabled"}
+    if enabled and ear_stream is None and _state.is_running():
+        try:
+            from ears import EarStream
+            with _state.lock:
+                _state.ears = EarStream(ears_cfg).start()
+            return {"status": "ok", "ears": _state.ears.status}
+        except Exception as e:
+            return {"status": "ok", "ears": f"enabled but failed to start: {e}"}
+    return {"status": "ok", "ears": "enabled" if enabled else "disabled"}
+
+
+@mcp.tool()
 async def get_status() -> dict:
     """Return current pipeline state and health.
 
@@ -442,6 +515,8 @@ async def get_status() -> dict:
                 "estimated_vision_tokens": _state.estimated_vision_tokens,
                 "note": "token estimate uses ~1 token per 750 pixels (approximate)",
             },
+            "ears": (getattr(_state, "ears", None).status_dict()
+                     if getattr(_state, "ears", None) else {"status": "not running"}),
         }
 
 

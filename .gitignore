@@ -5,3 +5,4 @@ watch_buddy.db
 watch_buddy_debug.log
 .env
 settings.local.json
+transcripts/

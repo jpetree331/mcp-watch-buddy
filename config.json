@@ -17,6 +17,15 @@
     "scale": 0.6,
     "exclude_zones": ["chat"]
   },
+  "ears": {
+    "enabled": true,
+    "chunk_seconds": 12,
+    "silence_rms": 0.006,
+    "endpoint": "https://vonkaiser-audiodojo.chutes.ai/stt/whisper",
+    "language": null,
+    "keep_minutes": 30,
+    "log_to_file": true
+  },
   "screen_zones": {
     "gameplay": {"x": 0, "y": 0, "width": 1000, "height": 680},
     "chat": {"x": 1000, "y": 0, "width": 280, "height": 720},
