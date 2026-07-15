@@ -23,7 +23,7 @@
     "silence_rms": 0.006,
     "endpoint": "https://vonkaiser-audiodojo.chutes.ai/stt/whisper",
     "language": null,
-    "keep_minutes": 30,
+    "keep_minutes": 240,
     "log_to_file": true
   },
   "screen_zones": {
